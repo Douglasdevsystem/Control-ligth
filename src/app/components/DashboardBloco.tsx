@@ -1,10 +1,26 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { escolas, Asset, Sala } from '../data/mockData';
-import { ArrowLeft, Building, LayoutGrid, PlugZap, Clock3, Zap } from 'lucide-react';
+import {
+  ArrowLeft,
+  Activity,
+  Wifi,
+  WifiOff,
+  Zap,
+} from 'lucide-react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
+import {
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from 'recharts';
 
 const calcularHorasIntervalo = (inicio: string, fim: string) => {
   const [horaInicio, minutoInicio] = inicio.split(':').map(Number);
@@ -32,10 +48,49 @@ const calcularHorasUsoSemanais = (sala: Sala) => {
   }, 0);
 };
 
+type MedicaoEnergia = {
+  tempo: string;
+  ativa: number;
+  reativa: number;
+  tensao: number;
+  fatorPotencia: number;
+};
+
+const calcularFatorPotencia = (ativa: number, reativa: number) => {
+  const aparente = Math.sqrt(ativa * ativa + reativa * reativa);
+  if (!aparente) {
+    return 1;
+  }
+
+  return ativa / aparente;
+};
+
+const gerarPonto = (baseAtiva: number, baseReativa: number, indice: number): MedicaoEnergia => {
+  const variacaoAtiva = Math.sin(indice / 3) * 7 + (Math.random() - 0.5) * 4;
+  const variacaoReativa = Math.cos(indice / 4) * 4 + (Math.random() - 0.5) * 3;
+  const ativa = Math.max(10, Number((baseAtiva + variacaoAtiva).toFixed(2)));
+  const reativa = Math.max(4, Number((baseReativa + variacaoReativa).toFixed(2)));
+  const tensao = Number((220 + Math.sin(indice / 2) * 2 + (Math.random() - 0.5) * 1.4).toFixed(1));
+  const fatorPotencia = Number(calcularFatorPotencia(ativa, reativa).toFixed(3));
+
+  return {
+    tempo: new Date().toLocaleTimeString('pt-BR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }),
+    ativa,
+    reativa,
+    tensao,
+    fatorPotencia,
+  };
+};
+
 export function DashboardBloco() {
   const navigate = useNavigate();
   const { id, corredorId } = useParams();
   const [overrideVersion, setOverrideVersion] = useState(0);
+  const [isOnline, setIsOnline] = useState(true);
 
   const escola = escolas.find((item) => item.id === id);
   const corredor = escola?.corredores.find((item) => item.id === corredorId);
@@ -107,6 +162,58 @@ export function DashboardBloco() {
   );
   const horasUsoBloco = salasEfetivasDoBloco.reduce((total, sala) => total + calcularHorasUsoSemanais(sala), 0);
 
+  const cargaRelativa = totalEquipamentos > 0 ? equipamentosLigados / totalEquipamentos : 0;
+
+  const correntes = [
+    {
+      fase: 'L1',
+      corrente: Number((32 + cargaRelativa * 22).toFixed(1)),
+      maximo: 80,
+      cor: 'from-emerald-500 to-emerald-400',
+    },
+    {
+      fase: 'L2',
+      corrente: Number((28 + cargaRelativa * 20).toFixed(1)),
+      maximo: 80,
+      cor: 'from-cyan-500 to-cyan-400',
+    },
+    {
+      fase: 'L3',
+      corrente: Number((30 + cargaRelativa * 24).toFixed(1)),
+      maximo: 80,
+      cor: 'from-amber-400 to-yellow-300',
+    },
+  ];
+
+  const baseAtiva = Math.max(24, Number((consumoTotalBloco / Math.max(salasEfetivasDoBloco.length, 1) / 4).toFixed(2)));
+  const baseReativa = Number((baseAtiva * 0.42).toFixed(2));
+
+  const [medicoes, setMedicoes] = useState<MedicaoEnergia[]>(() =>
+    Array.from({ length: 20 }, (_, indice) => gerarPonto(baseAtiva, baseReativa, indice))
+  );
+
+  useEffect(() => {
+    setMedicoes(Array.from({ length: 20 }, (_, indice) => gerarPonto(baseAtiva, baseReativa, indice)));
+  }, [baseAtiva, baseReativa, corredorId]);
+
+  useEffect(() => {
+    const intervalo = window.setInterval(() => {
+      setMedicoes((atual) => {
+        const proximo = [...atual, gerarPonto(baseAtiva, baseReativa, atual.length + 1)];
+        return proximo.slice(-24);
+      });
+
+      setIsOnline(Math.random() > 0.08);
+    }, 3000);
+
+    return () => window.clearInterval(intervalo);
+  }, [baseAtiva, baseReativa]);
+
+  const ultimaMedicao = medicoes[medicoes.length - 1];
+  const fatorPotenciaAtual = ultimaMedicao?.fatorPotencia ?? 1;
+  const alertaFatorPotencia = fatorPotenciaAtual < 0.92;
+  const consumoKvarh = Number((consumoTotalBloco * 0.38).toFixed(2));
+
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="bg-blue-900 text-white p-6 shadow-lg">
@@ -120,69 +227,151 @@ export function DashboardBloco() {
               <ArrowLeft className="mr-2 h-5 w-5" />
               Voltar para escola
             </Button>
-            <div className="flex items-center gap-2">
-              <Zap className="h-5 w-5" />
-              <span className="text-sm">Detalhes do bloco</span>
+            <div className="flex items-center gap-3 text-sm">
+              {isOnline ? <Wifi className="h-4 w-4 text-emerald-400" /> : <WifiOff className="h-4 w-4 text-red-400" />}
+              <span className={isOnline ? 'text-emerald-300' : 'text-red-300'}>{isOnline ? 'Online' : 'Offline'}</span>
             </div>
           </div>
-          <h1 className="text-3xl font-bold mb-1">{corredor.nome}</h1>
-          <p className="text-blue-200">{escola.nome}</p>
+          <h1 className="text-3xl font-bold mb-1">Sistema de Monitoramento Elétrico - ELO</h1>
+          <p className="text-blue-200">{corredor.nome} • {escola.nome}</p>
         </div>
       </div>
 
       <div className="max-w-7xl mx-auto p-6 space-y-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          <Card className="bg-gradient-to-br from-blue-600 to-blue-700 text-white">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium flex items-center gap-2">
-                <LayoutGrid className="h-4 w-4" />
-                Salas no bloco
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold">{salasEfetivasDoBloco.length}</div>
-              <p className="text-blue-100 text-sm mt-1">Salas vinculadas</p>
-            </CardContent>
-          </Card>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          {correntes.map((item) => {
+            const percentual = Math.min(100, (item.corrente / item.maximo) * 100);
 
-          <Card className="bg-gradient-to-br from-emerald-600 to-emerald-700 text-white">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium flex items-center gap-2">
-                <Building className="h-4 w-4" />
-                Consumo geral
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold">{consumoTotalBloco.toLocaleString()} kWh</div>
-              <p className="text-emerald-100 text-sm mt-1">Total do bloco</p>
-            </CardContent>
-          </Card>
+            return (
+              <Card key={item.fase} className="border border-gray-200 bg-white">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm font-medium text-gray-700 flex items-center justify-between">
+                    <span>Fase {item.fase}</span>
+                    <span className="text-xs text-gray-500">Corrente (A)</span>
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="relative h-3 overflow-hidden rounded-full bg-gray-200">
+                    <div
+                      className={`h-full rounded-full bg-gradient-to-r ${item.cor} transition-all duration-700`}
+                      style={{ width: `${percentual}%` }}
+                    />
+                  </div>
+                  <div className="flex items-end justify-between">
+                    <div className="text-3xl font-bold text-gray-900">{item.corrente} A</div>
+                    <Badge variant="outline" className="border-gray-300 text-gray-700">
+                      {percentual.toFixed(0)}%
+                    </Badge>
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
 
-          <Card className="bg-gradient-to-br from-orange-600 to-orange-700 text-white">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium flex items-center gap-2">
-                <PlugZap className="h-4 w-4" />
-                Equipamentos ligados
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold">{equipamentosLigados}/{totalEquipamentos}</div>
-              <p className="text-orange-100 text-sm mt-1">Ativos em operação</p>
-            </CardContent>
-          </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-gray-900 flex items-center gap-2">
+              <Activity className="h-5 w-5 text-blue-600" />
+              Potência Ativa (kW) vs Potência Reativa (kVAr)
+            </CardTitle>
+            <CardDescription>Monitoramento em tempo real do bloco</CardDescription>
+          </CardHeader>
+          <CardContent className="h-[340px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={medicoes}>
+                <CartesianGrid strokeDasharray="4 4" stroke="#e5e7eb" />
+                <XAxis dataKey="tempo" stroke="#6b7280" tick={{ fill: '#6b7280', fontSize: 12 }} />
+                <YAxis stroke="#6b7280" tick={{ fill: '#6b7280', fontSize: 12 }} />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: '#ffffff',
+                    border: '1px solid #d1d5db',
+                    color: '#111827',
+                  }}
+                  labelStyle={{ color: '#374151' }}
+                />
+                <Legend wrapperStyle={{ color: '#374151' }} />
+                <Line
+                  type="monotone"
+                  dataKey="ativa"
+                  name="Potência Ativa (kW)"
+                  stroke="#22c55e"
+                  strokeWidth={3}
+                  dot={false}
+                  isAnimationActive
+                />
+                <Line
+                  type="monotone"
+                  dataKey="reativa"
+                  name="Potência Reativa (kVAr)"
+                  stroke="#38bdf8"
+                  strokeWidth={3}
+                  dot={false}
+                  isAnimationActive
+                />
+                <Line
+                  type="monotone"
+                  dataKey="tensao"
+                  name="Tensão (V)"
+                  stroke="#facc15"
+                  strokeWidth={2}
+                  dot={false}
+                  isAnimationActive
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
 
-          <Card className="bg-gradient-to-br from-purple-600 to-purple-700 text-white">
-            <CardHeader className="pb-3">
-              <CardTitle className="text-sm font-medium flex items-center gap-2">
-                <Clock3 className="h-4 w-4" />
-                Horas de uso
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="text-3xl font-bold">{horasUsoBloco.toFixed(1)} h</div>
-              <p className="text-purple-100 text-sm mt-1">Programadas por semana</p>
-            </CardContent>
-          </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>Tabela de Acumulados</CardTitle>
+            <CardDescription>Consumo total do corredor</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200 text-left text-gray-700">
+                    <th className="py-3 pr-4">Indicador</th>
+                    <th className="py-3 pr-4">Valor</th>
+                  </tr>
+                </thead>
+                <tbody className="text-gray-900">
+                  <tr className="border-b border-gray-200">
+                    <td className="py-3 pr-4">Consumo Total (kWh)</td>
+                    <td className="py-3 pr-4">{consumoTotalBloco.toLocaleString('pt-BR')} kWh</td>
+                  </tr>
+                  <tr>
+                    <td className="py-3 pr-4">Energia Reativa Acumulada (kVArh)</td>
+                    <td className="py-3 pr-4">{consumoKvarh.toLocaleString('pt-BR')} kVArh</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </CardContent>
+        </Card>
+
+        <div
+          className={`rounded-xl border px-5 py-4 transition-colors ${
+            alertaFatorPotencia ? 'bg-red-50 border-red-300 text-red-700' : 'bg-emerald-50 border-emerald-300 text-emerald-700'
+          }`}
+        >
+          <div className="flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3 font-semibold">
+              <Zap className="h-5 w-5" />
+              {alertaFatorPotencia
+                ? 'Atenção: Baixo Fator de Potência detectado'
+                : 'Fator de Potência dentro da faixa ideal'}
+            </div>
+            <Badge
+              variant="outline"
+              className={alertaFatorPotencia ? 'border-red-300 text-red-700' : 'border-emerald-300 text-emerald-700'}
+            >
+              FP {fatorPotenciaAtual.toFixed(3)}
+            </Badge>
+          </div>
         </div>
 
         <Card>
